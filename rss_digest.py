@@ -15,8 +15,12 @@ Requirements:
     
 Version 1.0
     1.0   Original by Claude
-    1.01   Updated with additional site urls and new output directory
+    1.01  Updated with additional site urls and new output directory
     1.02  Added google.blog.feed
+    1.04  Some summaries appear to be skipped
+        Changed model to gemma4:12b to try to overcome gemma4:e4b 
+        Removed prompt line: "If the content is too thin to summarize, say 'No summary available.'
+        
 """
 
 import argparse
@@ -39,7 +43,8 @@ import ollama
 DEFAULT_CONFIG = {
     # Ollama model to use for summarization
     #"model": "mistral-nemo:latest",
-    "model": "gemma4:e4b",
+    #"model": "gemma4:e4b",
+    "model":"gemma4:12B",
 
     # Where to write digest files (~ is expanded automatically)
     #"output_dir": "~/Documents/digests",
@@ -60,12 +65,18 @@ DEFAULT_CONFIG = {
     "max_age_hours": 48,
 
     # Summarization style prompt (feel free to tune this)
+    #"summary_prompt": (
+    #    "You are a concise technical news summarizer. "
+    #    "Given the title and content of an article, write a 2-5 sentence "
+    #    "plain-English summary. Focus on what is new or notable. "
+    #    "Do not editorialize or add opinions. "
+    #    "If the content is too thin to summarize, say 'No summary available.'"
+    #)
     "summary_prompt": (
-        "You are a concise technical news summarizer. "
-        "Given the title and content of an article, write a 2-5 sentence "
-        "plain-English summary. Focus on what is new or notable. "
-        "Do not editorialize or add opinions. "
-        "If the content is too thin to summarize, say 'No summary available.'"
+        "You are a technical news summarizer. "
+        "Visit the link to each article and review the content of that article."
+        "Given the title and content of an article, write a concise 2-5 sentence "
+        "plain-English summary. Focus on what is new or notable. "             
     ),
 
     # Additional Feeds: though this one is weekly so 168 hours
@@ -309,6 +320,11 @@ def render_markdown(sections: list[dict], cfg: dict) -> str:
         lines.append("")
 
     lines.append(f"*End of digest. {sum(len(s['articles']) for s in sections)} articles summarized.*")
+    
+    date_str = datetime.now().strftime("%A, %B %-d, %Y")
+    time_str = datetime.now().strftime("%I:%M %p")
+    lines.append(f"*End Processing at DateTime: {date_str} {time_str}")
+    
     return "\n".join(lines)
 
 
