@@ -20,6 +20,9 @@ Version 1.0
     1.04  Some summaries appear to be skipped
         Changed model to gemma4:12b to try to overcome gemma4:e4b 
         Removed prompt line: "If the content is too thin to summarize, say 'No summary available.'
+    
+    Next Fix - 1.05  For HackerNews it should summarize the linked article.  Maybe it is not being provided the content
+    at the end of the link?
         
 """
 
@@ -75,7 +78,8 @@ DEFAULT_CONFIG = {
     "summary_prompt": (
         "You are a technical news summarizer. "
         "Visit the link to each article and review the content of that article."
-        "Given the title and content of an article, write a concise 2-5 sentence "
+        "If that article appears to be too small to summarize you are not accessing the link.  You must access the link to reach the article."
+        "Given the title and content (or link to the content) of an article, write a concise 2-5 sentence "
         "plain-English summary. Focus on what is new or notable. "             
     ),
 
