@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.07 — 2026-09-11
+
+Report which Ollama server did the work.
+
+Two servers on one LAN are easy to confuse, and `ollama.Client()` falls back to
+`http://127.0.0.1:11434` without complaint when `OLLAMA_HOST` is unset — so a
+run can quietly land on the wrong machine and simply take hours longer, with
+nothing in the output to say so.
+
+- The digest header now names the resolved endpoint, whether it is this machine
+  or a remote one, and the server version.
+- Model residency is read from `/api/ps` after the first summarization: how
+  much of the model is in VRAM, and how much spilled to system RAM. This is
+  usually the real answer to "why was it slow".
+- A run that resolves to a local address is flagged in both the digest and the
+  log, stating whether `OLLAMA_HOST` was set.
+- Elapsed time and seconds-per-article are recorded in the header and footer.
+- New `ollama_host_names` config key maps a host or IP to a friendly name, since
+  LAN boxes rarely have reverse DNS.
+- `summarize()` takes an explicit `ollama.Client`, so the URL reported is
+  provably the one the requests went to.
+
 ## 1.06 — 2026-09-11
 
 - `article_age_hours()` used `time.mktime()` on feedparser's `*_parsed`

@@ -13,7 +13,7 @@ Requirements:
     pip install feedparser ollama requests beautifulsoup4
 
 
-Version 1.06
+Version 1.07
     1.0   Original by Claude
     1.01  Updated with additional site urls and new output directory
     1.02  Added google.blog.feed
@@ -36,14 +36,26 @@ Version 1.06
           time, skewing every age comparison by the UTC offset.
         - The trailing "End Processing" line was missing its closing
           asterisk and rendered as literal markdown.
+    1.07  Report which Ollama server actually did the work.
+        - The digest header now names the resolved endpoint, whether it
+          is this machine or a remote one, the server version, and how
+          much of the model sat in VRAM.
+        - A run that lands on a local server when OLLAMA_HOST was meant
+          to point elsewhere is called out in the digest and the log.
+        - Elapsed time and seconds-per-article are recorded, so a slow
+          run is visible in the document rather than inferred from file
+          timestamps.
+        - summarize() takes an explicit ollama.Client, so the endpoint
+          reported is provably the one used.
 """
 
 import argparse
 import calendar
 import json
 import logging
-# import os
+import os
 import re
+import socket
 import sys
 import time
 from datetime import datetime
@@ -107,6 +119,13 @@ DEFAULT_CONFIG = {
         "reddit.com", "github.com/login", "news.ycombinator.com",
         "bloomberg.com", "wsj.com", "ft.com",
     ],
+
+    # Friendly names for Ollama servers, keyed by host or IP. A LAN box
+    # usually has no reverse DNS, so the digest would otherwise report a bare
+    # address. Purely cosmetic. (v1.07)
+    "ollama_host_names": {
+        "192.168.1.10": "ollama-box",
+    },
 
     # Summarization style prompt (feel free to tune this)
     #"summary_prompt": (
@@ -410,7 +429,149 @@ def fetch_feed(feed_cfg: dict, cfg: dict, scrape_enabled: bool = True) -> list[d
     return articles
 
 
-def summarize(article: dict, cfg: dict) -> str:
+# ─────────────────────────────────────────────
+#  OLLAMA ENDPOINT IDENTIFICATION  (v1.07)
+# ─────────────────────────────────────────────
+
+def _address_is_local(ip: str) -> bool:
+    """
+    True if `ip` belongs to this machine.
+
+    Binding a socket to an address only succeeds when the address is one this
+    host actually owns, which covers loopback and every interface without
+    needing to enumerate them or take a dependency.
+    """
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.bind((ip, 0))
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def resolve_ollama_client() -> tuple:
+    """
+    Build the Ollama client and report the URL it will actually use.
+
+    ollama.Client() reads OLLAMA_HOST itself and silently falls back to
+    http://127.0.0.1:11434 when it is unset — which is the whole problem this
+    function exists to expose. Reading base_url back off the client, rather
+    than re-reading the environment, means the URL reported is the one the
+    requests really go to.
+    """
+    client = ollama.Client()
+    try:
+        url = str(client._client.base_url).rstrip("/")
+    except AttributeError:
+        # Private attribute; if a future ollama release moves it, fall back to
+        # the same resolution the library documents.
+        url = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+        if "://" not in url:
+            url = f"http://{url}"
+    return client, url
+
+
+def describe_ollama_host(url: str, cfg: dict | None = None,
+                        timeout: float = 5.0) -> dict:
+    """
+    Work out who is on the other end of `url`: name, address, local or remote,
+    and which Ollama version is answering. Never raises — every field degrades
+    to a usable placeholder.
+    """
+    info = {
+        "url":          url,
+        "host":         "",
+        "ip":           "",
+        "name":         "",
+        "is_local":     False,
+        "reachable":    False,
+        "version":      "",
+        "env_was_set":  bool(os.environ.get("OLLAMA_HOST")),
+    }
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    info["host"] = host
+
+    try:
+        info["ip"] = socket.gethostbyname(host)
+    except OSError:
+        info["ip"] = host if host[0].isdigit() else ""
+
+    if info["ip"]:
+        info["is_local"] = _address_is_local(info["ip"])
+
+    # A bare IP is not much use in a report; try for a name.
+    if info["ip"] and host == info["ip"]:
+        prev = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(2.0)
+        try:
+            info["name"] = socket.gethostbyaddr(info["ip"])[0]
+        except OSError:
+            info["name"] = ""
+        finally:
+            socket.setdefaulttimeout(prev)
+    else:
+        info["name"] = host
+
+    if info["is_local"] and not info["name"]:
+        info["name"] = socket.gethostname()
+
+    # A configured alias wins over whatever DNS had to say.
+    aliases = (cfg or {}).get("ollama_host_names", {})
+    info["name"] = aliases.get(host) or aliases.get(info["ip"]) or info["name"]
+
+    try:
+        r = requests.get(f"{url}/api/version", timeout=timeout)
+        r.raise_for_status()
+        info["version"] = r.json().get("version", "")
+        info["reachable"] = True
+    except Exception as e:
+        log.debug(f"  Could not read /api/version from {url}: {e}")
+
+    return info
+
+
+def model_residency(url: str, model: str, timeout: float = 5.0) -> dict | None:
+    """
+    Ask a running server how the loaded model is split between VRAM and RAM.
+
+    This is the number that explains a slow run: a model larger than the card
+    spills into system memory and drags. Returns None when the model is not
+    currently loaded or the server will not say.
+    """
+    try:
+        r = requests.get(f"{url}/api/ps", timeout=timeout)
+        r.raise_for_status()
+        for m in r.json().get("models", []):
+            if model in (m.get("name", ""), m.get("model", "")):
+                total = m.get("size", 0) or 0
+                vram  = m.get("size_vram", 0) or 0
+                return {
+                    "size":    total,
+                    "vram":    vram,
+                    "pct_gpu": (100.0 * vram / total) if total else 0.0,
+                }
+    except Exception as e:
+        log.debug(f"  Could not read /api/ps from {url}: {e}")
+    return None
+
+
+def format_duration(seconds: float) -> str:
+    """Render an elapsed time as e.g. '2h 58m 04s'."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {sec:02d}s"
+    if m:
+        return f"{m}m {sec:02d}s"
+    return f"{sec}s"
+
+
+def summarize(article: dict, cfg: dict, client=None) -> str:
     """Call Ollama to summarize one article. Returns summary string."""
     title   = article["title"]
     content = article["content"][:cfg["max_content_chars"]]
@@ -418,7 +579,8 @@ def summarize(article: dict, cfg: dict) -> str:
     user_msg = f"Title: {title}\n\nContent:\n{content}"
 
     try:
-        response = ollama.chat(
+        chat = client.chat if client is not None else ollama.chat
+        response = chat(
             model=cfg["model"],
             messages=[
                 {"role": "system", "content": cfg["summary_prompt"]},
@@ -435,20 +597,72 @@ def summarize(article: dict, cfg: dict) -> str:
 #  MARKDOWN RENDERER
 # ─────────────────────────────────────────────
 
-def render_markdown(sections: list[dict], cfg: dict) -> str:
+def render_run_report(endpoint: dict | None, residency: dict | None,
+                      elapsed: float | None, article_count: int) -> list[str]:
+    """
+    Describe the machine that did the summarizing. (v1.07)
+
+    Two Ollama servers on one LAN are easy to confuse, and the client falls
+    back to localhost without complaint when OLLAMA_HOST is unset — so a run
+    can quietly land on the wrong box and simply take hours longer. Naming the
+    endpoint in the digest turns that into something you can see.
+    """
+    if not endpoint:
+        return []
+
+    where = "this machine" if endpoint["is_local"] else "remote"
+    name  = endpoint["name"] or endpoint["host"]
+    line  = f"> **Ollama** `{endpoint['url']}` — {name} ({where})"
+    if endpoint["version"]:
+        line += f", server v{endpoint['version']}"
+    if not endpoint["reachable"]:
+        line += " — **did not answer /api/version**"
+    out = [line]
+
+    if residency:
+        gb  = residency["size"] / 1e9
+        pct = residency["pct_gpu"]
+        note = f"> **Model** {gb:.1f} GB resident, {pct:.0f}% in VRAM"
+        if pct < 99:
+            note += (f" — **{100 - pct:.0f}% spilled to system RAM**, which is "
+                     f"the usual cause of a slow run")
+        out.append(note)
+
+    if elapsed is not None:
+        per = f", {elapsed / article_count:.1f}s per article" if article_count else ""
+        out.append(f"> **Run time** {format_duration(elapsed)} for "
+                   f"{article_count} article{'s' if article_count != 1 else ''}{per}")
+
+    if endpoint["is_local"] and endpoint["env_was_set"]:
+        out.append("")
+        out.append("> ⚠️ `OLLAMA_HOST` was set, yet the run still resolved to a "
+                   "local address.")
+    elif endpoint["is_local"] and not endpoint["env_was_set"]:
+        out.append("")
+        out.append("> ⚠️ `OLLAMA_HOST` was not set, so this fell back to the "
+                   "local server. If you meant to use another machine, export "
+                   "it before running.")
+
+    return out
+
+
+def render_markdown(sections: list[dict], cfg: dict,
+                    endpoint: dict | None = None,
+                    residency: dict | None = None,
+                    elapsed: float | None = None) -> str:
     """Build the full markdown digest document."""
     date_str = datetime.now().strftime("%A, %B %-d, %Y")
     time_str = datetime.now().strftime("%I:%M %p")
     model    = cfg["model"]
+    total    = sum(len(s["articles"]) for s in sections)
 
     lines = [
         f"# 📰 Daily Digest — {date_str}",
         f"",
         f"> Generated at {time_str} by `rss_digest.py` using `{model}`.",
-        f"",
-        "---",
-        "",
     ]
+    lines.extend(render_run_report(endpoint, residency, elapsed, total))
+    lines.extend(["", "---", ""])
 
     if not sections:
         lines.append("_No new articles found within the configured time window._")
@@ -491,12 +705,15 @@ def render_markdown(sections: list[dict], cfg: dict) -> str:
         lines.append("---")
         lines.append("")
 
-    lines.append(f"*End of digest. {sum(len(s['articles']) for s in sections)} articles summarized.*")
-    
+    lines.append(f"*End of digest. {total} articles summarized.*")
+
     date_str = datetime.now().strftime("%A, %B %-d, %Y")
     time_str = datetime.now().strftime("%I:%M %p")
-    lines.append(f"*End Processing at DateTime: {date_str} {time_str}*")
-    
+    tail = f"*End Processing at DateTime: {date_str} {time_str}"
+    if elapsed is not None:
+        tail += f" — took {format_duration(elapsed)}"
+    lines.append(tail + "*")
+
     return "\n".join(lines)
 
 
@@ -522,6 +739,15 @@ def main():
 
     output_dir = Path(cfg["output_dir"]).expanduser()
 
+    # Resolve the Ollama endpoint up front so the log says which server this
+    # run will use before it spends an hour using it. (v1.07)
+    endpoint  = None
+    residency = None
+    client    = None
+    if not args.no_llm:
+        client, ollama_url = resolve_ollama_client()
+        endpoint = describe_ollama_host(ollama_url, cfg)
+
     log.info("=" * 55)
     log.info("  RSS Digest Agent starting")
     log.info(f"  Model   : {cfg['model']}")
@@ -531,8 +757,20 @@ def main():
                      else f"on (below {cfg['min_content_chars']} chars)")
     log.info(f"  Scrape  : {scrape_status}")
     log.info(f"  Output  : {output_dir}")
+    if endpoint:
+        where = "LOCAL" if endpoint["is_local"] else "remote"
+        ver   = f" v{endpoint['version']}" if endpoint["version"] else ""
+        log.info(f"  Ollama  : {endpoint['url']} "
+                 f"[{where}: {endpoint['name'] or endpoint['host']}]{ver}")
+        if not endpoint["reachable"]:
+            log.warning("  ⚠ Ollama did not answer /api/version — "
+                        "summaries will likely fail")
+        elif endpoint["is_local"]:
+            log.warning(f"  ⚠ Summarizing on THIS machine "
+                        f"(OLLAMA_HOST {'set' if endpoint['env_was_set'] else 'NOT set'})")
     log.info("=" * 55)
 
+    started  = time.monotonic()
     sections = []
 
     for feed_cfg in cfg["feeds"]:
@@ -551,7 +789,15 @@ def main():
                 art["summary"] = strip_html(art["content"])[:300] + "…"
             else:
                 log.info(f"    Summarizing: {art['title'][:60]}…")
-                art["summary"] = summarize(art, cfg)
+                art["summary"] = summarize(art, cfg, client)
+                # Once the first call has forced the model to load, ask the
+                # server how it split it between VRAM and RAM. (v1.07)
+                if residency is None and endpoint and endpoint["reachable"]:
+                    residency = model_residency(endpoint["url"], cfg["model"])
+                    if residency:
+                        log.info(f"    Model residency: "
+                                 f"{residency['size'] / 1e9:.1f} GB, "
+                                 f"{residency['pct_gpu']:.0f}% in VRAM")
                 time.sleep(cfg["request_delay"])
             summarized.append(art)
 
@@ -562,7 +808,8 @@ def main():
             })
 
     # Render
-    digest = render_markdown(sections, cfg)
+    elapsed = time.monotonic() - started
+    digest  = render_markdown(sections, cfg, endpoint, residency, elapsed)
 
     if args.dry_run:
         print(digest)
@@ -579,6 +826,7 @@ def main():
     log.info("=" * 55)
     log.info(f"  ✓ Digest saved: {out_path}")
     log.info(f"  ✓ {total} articles across {len(sections)} feeds")
+    log.info(f"  ✓ Elapsed: {format_duration(elapsed)}")
     log.info("=" * 55)
 
 

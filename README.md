@@ -81,6 +81,7 @@ only `model` and `feeds` leaves every other default intact.
 | `url_timeout` | `12` | Seconds before abandoning a page |
 | `max_scrape_chars` | `20000` | Hard cap before trimming to `max_content_chars` |
 | `scrape_skip_hosts` | see config | Paywalls, JS-only apps, media hosts |
+| `ollama_host_names` | `{"192.168.1.10": "ollama-box"}` | Cosmetic host→name map for the run report |
 | `summary_prompt` | see config | System prompt |
 | `feeds` | see config | `[{ "name": ..., "url": ..., "scrape": false }]` |
 
@@ -111,6 +112,36 @@ read the article; it cannot, and it responded with hallucinated summaries or
 refusals. The fetching moved to Python in 1.05, and the prompt now declares the
 body text to be scraped web content, to be treated strictly as data rather than
 as instructions.
+
+---
+
+## Which server did the work
+
+The digest header names the Ollama endpoint the run actually used:
+
+```
+> Generated at 10:31 PM by `rss_digest.py` using `gemma4:31b`.
+> **Ollama** `http://192.168.1.10:11434` — ollama-box (remote), server v0.32.14
+> **Model** 21.9 GB resident, 75% in VRAM — **25% spilled to system RAM**, which is the usual cause of a slow run
+> **Run time** 58s for 1 article, 58.2s per article
+```
+
+This exists because `ollama.Client()` falls back to `http://127.0.0.1:11434`
+when `OLLAMA_HOST` is unset, without saying so. With two servers on one LAN,
+a run can land on the wrong machine and just take hours longer, and nothing in
+the output would tell you. The URL is read back off the client rather than from
+the environment, so it is provably the one the requests went to; a local
+address is flagged in the digest and the log.
+
+**Model residency is the number to watch.** It comes from `/api/ps` after the
+first summarization. Anything below 100% in VRAM means the model did not fit on
+the card and the remainder is being worked out of system RAM, which costs far
+more than any network hop between machines. A model that fits entirely in VRAM
+is the single largest lever on run time — much larger than which box you send
+the work to.
+
+`ollama_host_names` maps an address to a readable name, since a LAN host
+usually has no reverse DNS entry to find.
 
 ---
 
