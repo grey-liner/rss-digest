@@ -1,0 +1,23 @@
+# Local config with personal feeds / paths
+config.json
+my_config.json
+*.local.json
+
+# Output
+digests/
+*.md.bak
+rss_digest.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ollama_env/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
