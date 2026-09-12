@@ -13,7 +13,7 @@ Requirements:
     pip install feedparser ollama requests beautifulsoup4
 
 
-Version 1.05
+Version 1.06
     1.0   Original by Claude
     1.01  Updated with additional site urls and new output directory
     1.02  Added google.blog.feed
@@ -31,9 +31,15 @@ Version 1.05
           sees text this script hands it, so telling it to "visit the link"
           made it hallucinate or give up. Scraping is now done in Python.
         - fetch_feed() now takes cfg instead of two loose args.
+    1.06  Two fixes.
+        - article_age_hours() read feedparser's UTC timestamp as local
+          time, skewing every age comparison by the UTC offset.
+        - The trailing "End Processing" line was missing its closing
+          asterisk and rendered as literal markdown.
 """
 
 import argparse
+import calendar
 import json
 import logging
 # import os
@@ -249,7 +255,10 @@ def article_age_hours(entry) -> float:
     published = entry.get("published_parsed") or entry.get("updated_parsed")
     if not published:
         return 0.0
-    pub_ts = time.mktime(published)
+    # feedparser normalizes *_parsed to UTC. time.mktime() would read it as
+    # local time and skew every age by the UTC offset; timegm() is the UTC
+    # counterpart. (v1.06)
+    pub_ts = calendar.timegm(published)
     return (time.time() - pub_ts) / 3600
 
 
@@ -286,7 +295,7 @@ def fetch_article_text(url: str, cfg: dict) -> str:
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) rss_digest/1.05 "
+            "Mozilla/5.0 (X11; Linux x86_64) rss_digest/1.06 "
             "(personal digest bot)"
         ),
         "Accept": "text/html,application/xhtml+xml",
@@ -346,7 +355,7 @@ def fetch_feed(feed_cfg: dict, cfg: dict, scrape_enabled: bool = True) -> list[d
 
     log.info(f"  Fetching: {feed_cfg['name']}  ({url})")
     try:
-        parsed = feedparser.parse(url, agent="rss_digest/1.05")
+        parsed = feedparser.parse(url, agent="rss_digest/1.06")
     except Exception as e:
         log.warning(f"  ✗ Failed to fetch {url}: {e}")
         return []
@@ -486,7 +495,7 @@ def render_markdown(sections: list[dict], cfg: dict) -> str:
     
     date_str = datetime.now().strftime("%A, %B %-d, %Y")
     time_str = datetime.now().strftime("%I:%M %p")
-    lines.append(f"*End Processing at DateTime: {date_str} {time_str}")
+    lines.append(f"*End Processing at DateTime: {date_str} {time_str}*")
     
     return "\n".join(lines)
 

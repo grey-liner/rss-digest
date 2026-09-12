@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.06 — 2026-09-11
+
+- `article_age_hours()` used `time.mktime()` on feedparser's `*_parsed`
+  timestamp. Those are normalized to UTC, and `mktime()` interprets its
+  argument as local time, so every article's age was off by the machine's UTC
+  offset — entries near the `max_age_hours` boundary were included or dropped
+  incorrectly. Now uses `calendar.timegm()`.
+- The trailing "End Processing at DateTime" line was missing its closing `*`,
+  so it rendered as literal text rather than emphasis.
+
 ## 1.05 — 2026-09-10
 
 Link scraping for aggregator feeds (Hacker News, Slashdot).
