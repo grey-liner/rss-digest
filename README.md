@@ -54,6 +54,8 @@ export OLLAMA_HOST="http://192.168.1.10:11434"
 | `--dry-run` | Print to stdout instead of saving |
 | `--no-llm` | Skip Ollama; truncate the source text instead of summarizing |
 | `--no-scrape` | Never follow article links, even for thin entries |
+| `--think` | Re-enable the model's hidden reasoning trace |
+| `--num-ctx N` | Override the context window (`0` = model default) |
 | `--config FILE` | Load a JSON config file over the defaults |
 | `--output DIR` | Override the output directory |
 
@@ -82,6 +84,8 @@ only `model` and `feeds` leaves every other default intact.
 | `max_scrape_chars` | `20000` | Hard cap before trimming to `max_content_chars` |
 | `scrape_skip_hosts` | see config | Paywalls, JS-only apps, media hosts |
 | `ollama_host_names` | `{"192.168.1.10": "ollama-box"}` | Cosmetic host→name map for the run report |
+| `think` | `false` | Hidden reasoning trace. Costs ~6x runtime for output this script discards |
+| `num_ctx` | `4096` | Context window per call; `0` defers to the model |
 | `summary_prompt` | see config | System prompt |
 | `feeds` | see config | `[{ "name": ..., "url": ..., "scrape": false }]` |
 
@@ -142,6 +146,35 @@ the work to.
 
 `ollama_host_names` maps an address to a readable name, since a LAN host
 usually has no reverse DNS entry to find.
+
+---
+
+## Thinking models
+
+Some models — `gemma4:31b` among them — produce a hidden reasoning trace in
+`message["thinking"]` before the answer. This script reads only
+`message["content"]`, so that reasoning is generated at full cost and thrown
+away. On one measured article it was 232 of 277 generated tokens: 84% of the
+work, discarded.
+
+`think` defaults to `false` for that reason. Measured over three real articles:
+
+| | per article |
+|---|---|
+| `--think`, 32k context | 76.7s |
+| default, `num_ctx` 8192 | 17.9s |
+| default, `num_ctx` 4096 | **13.1s** |
+
+Summary quality was indistinguishable. Use `--think` to compare for yourself.
+
+This also had a correctness cost. A thinking model that runs out of room
+answers entirely inside `thinking` and leaves `content` empty — which the old
+code returned as an empty string, producing a blank entry with no error. Since
+1.08 that is logged and marked in the digest.
+
+`num_ctx` matters less but is not nothing: the KV cache is sized from it, and
+prompts here top out at 1272 tokens, so the model's 32768 default reserved
+memory that was never used.
 
 ---
 

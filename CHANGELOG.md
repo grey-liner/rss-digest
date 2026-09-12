@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.08 — 2026-09-12
+
+Stop paying for reasoning this script throws away.
+
+`gemma4:31b` is a thinking model: it emits a hidden reasoning trace into
+`message["thinking"]` before its answer, and `summarize()` reads only
+`message["content"]`. Every one of those tokens was generated at full cost and
+discarded. Measured over three real Hacker News articles on ollama-box:
+
+| | per article |
+|---|---|
+| thinking on, 32k context (previous behaviour) | 76.7s |
+| thinking off, `num_ctx` 8192 | 17.9s |
+| thinking off, `num_ctx` 4096 | **13.1s** |
+
+- New `think` config key, default `False`, with `--think` to restore the old
+  behaviour for comparison.
+- New `num_ctx` config key, default `4096`, with `--num-ctx N` to override and
+  `0` to defer to the model. Prompts here measured 1272 tokens at worst across
+  these feeds, bounded by `max_content_chars`, so 4096 leaves ~2x headroom.
+- `summarize()` now reports an empty `content` field rather than returning an
+  empty string. A thinking model that runs out of room answers entirely in
+  `thinking` and leaves `content` blank, which silently produced empty entries
+  and is the likely cause of the "some summaries appear to be skipped" note in
+  1.04.
+- Both settings appear in the log banner and the digest header.
+
 ## 1.07 — 2026-09-11
 
 Report which Ollama server did the work.

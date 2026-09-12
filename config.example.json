@@ -4,6 +4,8 @@
     "max_articles_per_feed": 100,
     "max_content_chars": 2500,
     "request_delay": 10.0,
+    "think": false,
+    "num_ctx": 4096,
     "max_age_hours": 48,
     "scrape_links": true,
     "min_content_chars": 400,
