@@ -195,6 +195,22 @@ crontab -e
 30 3 * * * /home/YOUR_USER/.local/bin/rss_digest.sh
 ```
 
+### Keeping your own settings out of the repo
+
+`config.json` is gitignored. Put anything specific to your machines in it —
+`ollama_host_names`, `output_dir`, a private feed list — and pass it with
+`--config`, which is what the wrapper does. The merge is one key at a time
+over `DEFAULT_CONFIG`, so a file naming only `ollama_host_names` leaves every
+other default untouched:
+
+```json
+{
+    "ollama_host_names": {
+        "192.168.1.10": "the-box-in-the-basement"
+    }
+}
+```
+
 Make sure Ollama survives a reboot:
 
 ```bash
