@@ -152,6 +152,7 @@ DEFAULT_CONFIG = {
     # Friendly names for Ollama servers, keyed by host or IP. A LAN box
     # usually has no reverse DNS, so the digest would otherwise report a bare
     # address. Purely cosmetic. (v1.07)
+    # The entry below is an example — replace it with your own hosts.
     "ollama_host_names": {
         "192.168.1.10": "ollama-box",
     },

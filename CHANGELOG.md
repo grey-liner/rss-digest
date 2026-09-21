@@ -7,7 +7,7 @@ Stop paying for reasoning this script throws away.
 `gemma4:31b` is a thinking model: it emits a hidden reasoning trace into
 `message["thinking"]` before its answer, and `summarize()` reads only
 `message["content"]`. Every one of those tokens was generated at full cost and
-discarded. Measured over three real Hacker News articles on ollama-box:
+discarded. Measured over three real Hacker News articles on a remote LAN box:
 
 | | per article |
 |---|---|
